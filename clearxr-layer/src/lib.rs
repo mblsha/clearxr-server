@@ -134,6 +134,7 @@ struct NextDispatch {
     suggest_interaction_profile_bindings: xr::pfn::SuggestInteractionProfileBindings,
     sync_actions: xr::pfn::SyncActions,
     get_action_state_boolean: xr::pfn::GetActionStateBoolean,
+    get_action_state_float: xr::pfn::GetActionStateFloat,
     apply_haptic_feedback: xr::pfn::ApplyHapticFeedback,
     stop_haptic_feedback: xr::pfn::StopHapticFeedback,
     path_to_string: xr::pfn::PathToString,
@@ -147,25 +148,86 @@ struct NextDispatch {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Hand { Left, Right }
 
-/// For a given (action, hand), which bit in the SpatialControllerPacket should
-/// override the boolean state?
-#[derive(Clone, Copy)]
-struct OverrideInfo {
-    hand: Hand,
-    bit_mask: u16,
+/// How to derive a boolean action state from the opaque channel packet.
+#[derive(Clone, Copy, Debug)]
+enum BoolSource {
+    /// Check a bitmask bit in the buttons field.
+    Bit(u16),
+    /// True when the analog trigger value >= 1.0.
+    TriggerClick,
+    /// True when the analog grip value >= 1.0.
+    GripClick,
 }
 
-/// Map component path suffix → bit mask for the opaque channel packet.
-fn component_to_bit(component: &str) -> Option<u16> {
+/// How to derive a float action state from the opaque channel packet.
+#[derive(Clone, Copy, Debug)]
+enum FloatSource {
+    /// Read the trigger f32 field directly.
+    Trigger,
+    /// Read the grip f32 field directly.
+    Grip,
+    /// Derive 1.0 / 0.0 from a touch bit (for sensors with no real analog).
+    TouchBit(u16),
+}
+
+/// Map component path suffix → boolean source for the opaque channel packet.
+/// Covers Oculus Touch, generic Khronos, and PSVR2 Sense interaction profiles.
+fn component_to_bool(component: &str) -> Option<BoolSource> {
     match component {
-        "/input/x/touch" | "/input/a/touch" => Some(SC_TOUCH_A),
-        "/input/y/touch" | "/input/b/touch" => Some(SC_TOUCH_B),
-        "/input/x/click" | "/input/a/click" => Some(SC_BTN_A),
-        "/input/y/click" | "/input/b/click" => Some(SC_BTN_B),
-        "/input/trigger/touch"              => Some(SC_TOUCH_TRIGGER),
-        "/input/thumbstick/touch"           => Some(SC_TOUCH_THUMBSTICK),
-        "/input/thumbstick/click"           => Some(SC_BTN_THUMBSTICK),
-        "/input/menu/click"                 => Some(SC_BTN_MENU),
+        // ── Face buttons (A/B/X/Y and PSVR2 equivalents) ──
+        "/input/x/touch" | "/input/a/touch"
+            | "/input/square/touch" | "/input/cross/touch"  => Some(BoolSource::Bit(SC_TOUCH_A)),
+        "/input/y/touch" | "/input/b/touch"
+            | "/input/triangle/touch" | "/input/circle/touch" => Some(BoolSource::Bit(SC_TOUCH_B)),
+        "/input/x/click" | "/input/a/click"
+            | "/input/square/click" | "/input/cross/click"  => Some(BoolSource::Bit(SC_BTN_A)),
+        "/input/y/click" | "/input/b/click"
+            | "/input/triangle/click" | "/input/circle/click" => Some(BoolSource::Bit(SC_BTN_B)),
+
+        // ── Trigger (touch is a bit, click is derived from analog >= 1.0) ──
+        "/input/trigger/touch" | "/input/l2/touch" | "/input/r2/touch"
+            => Some(BoolSource::Bit(SC_TOUCH_TRIGGER)),
+        "/input/trigger/click" | "/input/l2/click" | "/input/r2/click"
+            => Some(BoolSource::TriggerClick),
+
+        // ── Grip / squeeze (touch is a bit, click is derived from analog >= 1.0) ──
+        "/input/grip/touch" | "/input/squeeze/touch"
+            | "/input/l1/touch" | "/input/r1/touch"         => Some(BoolSource::Bit(SC_TOUCH_GRIP)),
+        "/input/grip/click" | "/input/squeeze/click"
+            | "/input/l1/click" | "/input/r1/click"         => Some(BoolSource::GripClick),
+
+        // ── Thumbstick / stick ──
+        "/input/thumbstick/touch"
+            | "/input/left_stick/touch" | "/input/right_stick/touch" => Some(BoolSource::Bit(SC_TOUCH_THUMBSTICK)),
+        "/input/thumbstick/click"
+            | "/input/left_stick/click" | "/input/right_stick/click" => Some(BoolSource::Bit(SC_BTN_THUMBSTICK)),
+
+        // ── Menu / system ──
+        "/input/menu/click"
+            | "/input/create/click" | "/input/options/click" => Some(BoolSource::Bit(SC_BTN_MENU)),
+
+        _ => None,
+    }
+}
+
+/// Map float/value component paths → the source for the float override.
+fn component_to_float(component: &str) -> Option<FloatSource> {
+    match component {
+        // Trigger analog → real f32 from packet
+        "/input/trigger/value" | "/input/l2/value" | "/input/r2/value"
+            => Some(FloatSource::Trigger),
+
+        // Grip / squeeze analog → real f32 from packet
+        "/input/grip/value" | "/input/squeeze/value"
+            | "/input/l1/value" | "/input/r1/value"
+            => Some(FloatSource::Grip),
+
+        // PSVR2 proximity sensors → derive from corresponding touch bit
+        "/input/l1_sensor/value" | "/input/r1_sensor/value"
+            => Some(FloatSource::TouchBit(SC_TOUCH_GRIP)),
+        "/input/l2_sensor/value" | "/input/r2_sensor/value"
+            => Some(FloatSource::TouchBit(SC_TOUCH_TRIGGER)),
+
         _ => None,
     }
 }
@@ -194,8 +256,10 @@ struct LayerState {
     next: NextDispatch,
     system_id: u64,
     opaque: Option<OpaqueChannel>,
-    /// (action_handle_raw, hand) → bit_mask to override
-    overrides: HashMap<(u64, Hand), u16>,
+    /// (action_handle_raw, hand) → how to derive the boolean override
+    overrides: HashMap<(u64, Hand), BoolSource>,
+    /// (action_handle_raw, hand) → how to derive the float override
+    float_overrides: HashMap<(u64, Hand), FloatSource>,
     haptic_actions: HashSet<(u64, Hand)>,
     /// Has the opaque channel extension been enabled?
     has_opaque_ext: bool,
@@ -206,7 +270,6 @@ static LAYER: Mutex<Option<LayerState>> = Mutex::new(None);
 // Store the next layer's getInstanceProcAddr for use during instance creation
 static NEXT_GPA: Mutex<Option<xr::pfn::GetInstanceProcAddr>> = Mutex::new(None);
 static NEXT_CREATE: Mutex<Option<CreateApiLayerInstanceFn>> = Mutex::new(None);
-
 // ============================================================
 // DLL export: xrNegotiateLoaderApiLayerInterface
 // ============================================================
@@ -359,14 +422,30 @@ unsafe extern "system" fn layer_create_api_layer_instance(
             *NEXT_GPA.lock().unwrap() = Some(next_gpa);
             *NEXT_CREATE.lock().unwrap() = Some(next_create);
 
-            // Check if opaque data channel extension is available
-            layer_log!(info, "[ClearXR Layer] Checking for opaque data channel extension...");
+            // Check which extensions the runtime supports
+            layer_log!(info, "[ClearXR Layer] Checking for available extensions...");
             let has_nvx1 = check_extension_available(next_gpa, "XR_NVX1_opaque_data_channel");
             let has_nv = check_extension_available(next_gpa, "XR_NV_opaque_data_channel");
             let has_opaque = has_nvx1 || has_nv;
             layer_log!(info, "[ClearXR Layer] Extension check: NVX1={}, NV={}", has_nvx1, has_nv);
 
-            // Build the next layer's ApiLayerCreateInfo (shared for both paths)
+            // Collect extension pointers: start with the app's original list,
+            // then append the opaque data channel extension if available.
+            let orig_ci = &*ci;
+            let mut ext_ptrs: Vec<*const c_char> = (0..orig_ci.enabled_extension_count as usize)
+                .map(|i| *orig_ci.enabled_extension_names.add(i))
+                .collect();
+
+            if has_opaque {
+                let opaque_ext: &[u8] = if has_nvx1 {
+                    b"XR_NVX1_opaque_data_channel\0"
+                } else {
+                    b"XR_NV_opaque_data_channel\0"
+                };
+                ext_ptrs.push(opaque_ext.as_ptr() as *const c_char);
+            }
+
+            // Build the next layer's ApiLayerCreateInfo
             let next_layer_ci = ApiLayerCreateInfo {
                 struct_type: STRUCT_API_LAYER_CREATE_INFO,
                 struct_version: layer_info.struct_version,
@@ -376,33 +455,12 @@ unsafe extern "system" fn layer_create_api_layer_instance(
                 next_info: ni.next,
             };
 
-            let result = if has_opaque {
-                let ext_name: &[u8] = if has_nvx1 {
-                    b"XR_NVX1_opaque_data_channel\0"
-                } else {
-                    b"XR_NV_opaque_data_channel\0"
-                };
+            let mut modified_ci = *ci;
+            modified_ci.enabled_extension_count = ext_ptrs.len() as u32;
+            modified_ci.enabled_extension_names = ext_ptrs.as_ptr();
 
-                let orig_ci = &*ci;
-                let orig_count = orig_ci.enabled_extension_count as usize;
-                let mut ext_ptrs: Vec<*const c_char> = Vec::with_capacity(orig_count + 1);
-                for i in 0..orig_count {
-                    ext_ptrs.push(*orig_ci.enabled_extension_names.add(i));
-                }
-                ext_ptrs.push(ext_name.as_ptr() as *const c_char);
-
-                let mut modified_ci = *ci;
-                modified_ci.enabled_extension_count = ext_ptrs.len() as u32;
-                modified_ci.enabled_extension_names = ext_ptrs.as_ptr();
-
-                layer_log!(info, "[ClearXR Layer] Calling next_create with {} extensions (added opaque channel).",
-                    ext_ptrs.len());
-                (next_create)(&modified_ci, &next_layer_ci, instance_out)
-            } else {
-                layer_log!(info, "[ClearXR Layer] No opaque channel ext, calling next_create with original {} extensions.",
-                    (*ci).enabled_extension_count);
-                (next_create)(ci, &next_layer_ci, instance_out)
-            };
+            layer_log!(info, "[ClearXR Layer] Calling next_create with {} extensions.", ext_ptrs.len());
+            let result = (next_create)(&modified_ci, &next_layer_ci, instance_out);
 
             if result != xr::Result::SUCCESS {
                 layer_log!(warn, "[ClearXR Layer] Next layer create instance failed: {:?}", result);
@@ -410,17 +468,15 @@ unsafe extern "system" fn layer_create_api_layer_instance(
             }
 
             let instance = *instance_out;
-
-            // Build dispatch table
             let dispatch = build_dispatch(next_gpa, instance);
 
-            // Store layer state
             *LAYER.lock().unwrap() = Some(LayerState {
                 instance,
                 next: dispatch,
                 system_id: 0,
                 opaque: None,
                 overrides: HashMap::new(),
+                float_overrides: HashMap::new(),
                 haptic_actions: HashSet::new(),
                 has_opaque_ext: has_opaque,
             });
@@ -514,6 +570,7 @@ unsafe fn build_dispatch(gpa: xr::pfn::GetInstanceProcAddr, instance: xr::Instan
         suggest_interaction_profile_bindings: load_fn(gpa, instance, b"xrSuggestInteractionProfileBindings\0"),
         sync_actions: load_fn(gpa, instance, b"xrSyncActions\0"),
         get_action_state_boolean: load_fn(gpa, instance, b"xrGetActionStateBoolean\0"),
+        get_action_state_float: load_fn(gpa, instance, b"xrGetActionStateFloat\0"),
         apply_haptic_feedback: load_fn(gpa, instance, b"xrApplyHapticFeedback\0"),
         stop_haptic_feedback: load_fn(gpa, instance, b"xrStopHapticFeedback\0"),
         path_to_string: load_fn(gpa, instance, b"xrPathToString\0"),
@@ -547,6 +604,7 @@ unsafe extern "system" fn layer_get_instance_proc_addr(
     }
 
     intercept!(b"xrGetInstanceProcAddr", layer_get_instance_proc_addr as xr::pfn::GetInstanceProcAddr);
+    intercept!(b"xrEnumerateInstanceExtensionProperties", hook_enumerate_extensions as xr::pfn::EnumerateInstanceExtensionProperties);
     intercept!(b"xrDestroyInstance", hook_destroy_instance as xr::pfn::DestroyInstance);
     intercept!(b"xrGetSystem", hook_get_system as xr::pfn::GetSystem);
     intercept!(b"xrCreateSession", hook_create_session as xr::pfn::CreateSession);
@@ -554,6 +612,7 @@ unsafe extern "system" fn layer_get_instance_proc_addr(
     intercept!(b"xrSuggestInteractionProfileBindings", hook_suggest_bindings as xr::pfn::SuggestInteractionProfileBindings);
     intercept!(b"xrSyncActions", hook_sync_actions as xr::pfn::SyncActions);
     intercept!(b"xrGetActionStateBoolean", hook_get_action_state_boolean as xr::pfn::GetActionStateBoolean);
+    intercept!(b"xrGetActionStateFloat", hook_get_action_state_float as xr::pfn::GetActionStateFloat);
     intercept!(b"xrApplyHapticFeedback", hook_apply_haptic_feedback as xr::pfn::ApplyHapticFeedback);
     intercept!(b"xrStopHapticFeedback", hook_stop_haptic_feedback as xr::pfn::StopHapticFeedback);
 
@@ -603,6 +662,32 @@ unsafe fn hand_from_path(state: &LayerState, path: xr::Path) -> Option<Hand> {
 // ============================================================
 // Intercepted functions
 // ============================================================
+
+unsafe extern "system" fn hook_enumerate_extensions(
+    layer_name: *const c_char,
+    property_capacity_input: u32,
+    property_count_output: *mut u32,
+    properties: *mut xr::ExtensionProperties,
+) -> xr::Result {
+    let next_fn: xr::pfn::EnumerateInstanceExtensionProperties = {
+        if let Some(next_gpa) = *NEXT_GPA.lock().unwrap() {
+            let mut fp: Option<xr::pfn::VoidFunction> = None;
+            let _ = (next_gpa)(
+                xr::Instance::NULL,
+                b"xrEnumerateInstanceExtensionProperties\0".as_ptr() as *const c_char,
+                &mut fp,
+            );
+            match fp {
+                Some(f) => std::mem::transmute(f),
+                None => return xr::Result::ERROR_RUNTIME_FAILURE,
+            }
+        } else {
+            return xr::Result::ERROR_RUNTIME_FAILURE;
+        }
+    };
+
+    (next_fn)(layer_name, property_capacity_input, property_count_output, properties)
+}
 
 unsafe extern "system" fn hook_destroy_instance(instance: xr::Instance) -> xr::Result {
     let next_fn;
@@ -714,12 +799,20 @@ unsafe extern "system" fn hook_suggest_bindings(
 
         if let Some((hand, component)) = parse_binding_path(path_str) {
             let action_raw = binding.action.into_raw();
-            if let Some(bit) = component_to_bit(component) {
+            if let Some(src) = component_to_bool(component) {
                 log::info!(
-                    "[ClearXR Layer] Recorded binding: action 0x{:x} {:?} {} → bit 0x{:x}",
-                    action_raw, hand, path_str, bit
+                    "[ClearXR Layer] Recorded bool binding: action 0x{:x} {:?} {} → {:?}",
+                    action_raw, hand, path_str, src
                 );
-                state.overrides.insert((action_raw, hand), bit);
+                state.overrides.insert((action_raw, hand), src);
+            }
+
+            if let Some(src) = component_to_float(component) {
+                log::info!(
+                    "[ClearXR Layer] Recorded float binding: action 0x{:x} {:?} {} → {:?}",
+                    action_raw, hand, path_str, src
+                );
+                state.float_overrides.insert((action_raw, hand), src);
             }
 
             if is_haptic_output_path(component) {
@@ -948,21 +1041,88 @@ unsafe extern "system" fn hook_get_action_state_boolean(
     };
 
     // Look up the override
-    if let Some(&bit) = state.overrides.get(&(action_raw, hand)) {
-        let buttons = match hand {
+    if let Some(&src) = state.overrides.get(&(action_raw, hand)) {
+        let hand_data = match hand {
             Hand::Left => {
-                if pkt.active_hands & 0x01 != 0 { pkt.left.buttons } else { return result; }
+                if pkt.active_hands & 0x01 != 0 { pkt.left } else { return result; }
             }
             Hand::Right => {
-                if pkt.active_hands & 0x02 != 0 { pkt.right.buttons } else { return result; }
+                if pkt.active_hands & 0x02 != 0 { pkt.right } else { return result; }
             }
         };
 
-        let pressed = buttons & bit != 0;
+        let active = match src {
+            BoolSource::Bit(bit) => hand_data.buttons & bit != 0,
+            BoolSource::TriggerClick => hand_data.trigger >= 1.0,
+            BoolSource::GripClick => hand_data.grip >= 1.0,
+        };
+
         let out = &mut *state_out;
-        out.current_state = if pressed { xr::TRUE } else { xr::FALSE };
+        out.current_state = if active { xr::TRUE } else { xr::FALSE };
         out.is_active = xr::TRUE;
-        // changed_since_last_sync is left as the runtime reported it
+    }
+
+    result
+}
+
+unsafe extern "system" fn hook_get_action_state_float(
+    session: xr::Session,
+    get_info: *const xr::ActionStateGetInfo,
+    state_out: *mut xr::ActionStateFloat,
+) -> xr::Result {
+    let mut guard = LAYER.lock().unwrap();
+    let state = match guard.as_mut() {
+        Some(s) => s,
+        None => return xr::Result::ERROR_HANDLE_INVALID,
+    };
+
+    let result = (state.next.get_action_state_float)(session, get_info, state_out);
+    if result != xr::Result::SUCCESS { return result; }
+
+    let pkt = match state.opaque.as_ref().and_then(|ch| ch.latest) {
+        Some(p) => p,
+        None => return result,
+    };
+
+    let info = &*get_info;
+    let action_raw = info.action.into_raw();
+
+    let hand = if info.subaction_path == xr::Path::NULL {
+        if state.float_overrides.contains_key(&(action_raw, Hand::Left)) {
+            Hand::Left
+        } else if state.float_overrides.contains_key(&(action_raw, Hand::Right)) {
+            Hand::Right
+        } else {
+            return result;
+        }
+    } else {
+        match hand_from_path(state, info.subaction_path) {
+            Some(h) => h,
+            None => return result,
+        }
+    };
+
+    if let Some(&src) = state.float_overrides.get(&(action_raw, hand)) {
+        let hand_data = match hand {
+            Hand::Left => {
+                if pkt.active_hands & 0x01 != 0 { pkt.left } else { return result; }
+            }
+            Hand::Right => {
+                if pkt.active_hands & 0x02 != 0 { pkt.right } else { return result; }
+            }
+        };
+
+        let value = match src {
+            FloatSource::Trigger => hand_data.trigger,
+            FloatSource::Grip => hand_data.grip,
+            FloatSource::TouchBit(bit) => {
+                if hand_data.buttons & bit != 0 { 1.0 } else { 0.0 }
+            }
+        };
+
+        let out = &mut *state_out;
+        out.current_state = value;
+        out.is_active = xr::TRUE;
     }
 
     result

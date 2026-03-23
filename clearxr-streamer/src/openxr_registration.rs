@@ -138,7 +138,22 @@ fn register_openxr_runtime_and_layer_impl() -> Result<OpenXrRegistrationStatus> 
             existing.order, layer_manifest
         );
     } else {
-        let next_order = next_layer_order(&current_user_entries);
+        let stale_entries = find_matching_layer_entries(&current_user_entries, &layer_manifest_path);
+        let order = if let Some(reuse) = stale_entries.first() {
+            let order = reuse.order;
+            for stale in &stale_entries {
+                info!(
+                    "Replacing stale Clear XR layer entry in HKEY_CURRENT_USER at position {} ({})",
+                    stale.order,
+                    stale.manifest_path.display()
+                );
+                layer_key.remove_value(&stale.registry_name).ok();
+            }
+            order
+        } else {
+            next_layer_order(&current_user_entries)
+        };
+
         for entry in &current_user_entries {
             info!(
                 "Found existing OpenXR layer entry in HKEY_CURRENT_USER at position {}: {}",
@@ -148,14 +163,14 @@ fn register_openxr_runtime_and_layer_impl() -> Result<OpenXrRegistrationStatus> 
         }
         info!(
             "Registering Clear XR OpenXR layer in HKEY_CURRENT_USER at position {} ({})",
-            next_order, layer_manifest
+            order, layer_manifest
         );
         layer_key
-            .set_value(&layer_manifest, &Value::from(next_order))
+            .set_value(&layer_manifest, &Value::from(order))
             .context("failed to register the Clear XR OpenXR layer")?;
         info!(
             "Registered Clear XR OpenXR layer successfully at position {}",
-            next_order
+            order
         );
     }
 
