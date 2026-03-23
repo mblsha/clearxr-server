@@ -14,7 +14,8 @@ It may expand to other mobile devicdes (e.g. iOS and iPad), headsets (e.g. Quest
 
 # Prerequisites
 ## Clear XR Server
-- Windows 10/11 PC with NVIDIA GPU.  Note that NVIDIA only tests Cloud XR on 4080, 5080, and 5090 consumer GPUs.  The authors have also tested on a 5070 Ti (RIP).
+- Windows 10/11 PC with NVIDIA 40xx (Ada), 50xx (Blackwell), or other Ada/Blackwell GPUs (L40, L40S, RTX 5000/6000 series and 5000/6000 pro).  
+- Note that NVIDIA only tests Cloud XR on 4090, 5080, and 5090 consumer GPUs.  The authors have also tested successfully on a 5070 Ti (RIP).  **Clear XR cannot run on NVIDIA 30xx (Ampere) cards.**  
 - Rust and its prerequisites, which include the Microsoft Visual Studio 2022 build tools. 
 - NVIDIA Cloud XR and Stream Manager SDKs, described below.
 
