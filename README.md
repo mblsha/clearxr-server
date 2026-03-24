@@ -6,7 +6,11 @@ Clear XR utilizes dynamic foveated streaming to render the sharpest content in t
 
 Currently only OpenXR compliant applications are supported. OpenVR (and SteamVR) applications are not yet supported.
 
-# For End Users
+# For End Users 
+
+Donwload the [latest release](https://github.com/clear-xr/clearxr-server/releases)
+
+Download the client from Test Flight
 
 [![Clear XR](https://i.imgur.com/DHhfmmK.png)](https://testflight.apple.com/join/ed6778fF)
 
