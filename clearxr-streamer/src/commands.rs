@@ -5,10 +5,10 @@ use crate::app_state::AppState;
 use crate::bonjour::BonjourService;
 use crate::cloudxr::CloudXrService;
 use crate::models::{
-    AppConfig, BarcodePayload, ConnectionHealth, OpenXrRegistrationStatus, RuntimeSnapshot,
-    StatusBlock,
+    AppConfig, BarcodePayload, ConnectionHealth, LocalIpAddressOption, OpenXrRegistrationStatus,
+    RuntimeSnapshot, StatusBlock,
 };
-use crate::network::{ordered_local_ipv4_addresses, preferred_local_ipv4_address};
+use crate::network::{ordered_local_ipv4_address_options, preferred_local_ipv4_address};
 use crate::openxr_registration::{
     deregister_openxr_layer as deregister_openxr_layer_impl,
     get_openxr_registration_status as get_openxr_registration_status_impl,
@@ -85,8 +85,8 @@ pub fn get_default_config() -> AppConfig {
 }
 
 #[tauri::command]
-pub fn get_local_ip_addresses() -> Result<Vec<String>, String> {
-    ordered_local_ipv4_addresses().map_err(|error| error.to_string())
+pub fn get_local_ip_addresses() -> Result<Vec<LocalIpAddressOption>, String> {
+    ordered_local_ipv4_address_options().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
