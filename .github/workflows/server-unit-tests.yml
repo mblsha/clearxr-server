@@ -1,0 +1,45 @@
+name: Server Unit Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clearxr-streamer-unit-tests:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Prepare runtime placeholders for build.rs
+        run: |
+          New-Item -ItemType Directory -Force -Path 'vendor', 'vendor/Server' | Out-Null
+
+          foreach ($path in @(
+            'vendor/NvStreamManagerClient.dll',
+            'vendor/NvStreamManagerClient.h'
+          )) {
+            if (-not (Test-Path $path)) {
+              New-Item -ItemType File -Path $path | Out-Null
+            }
+          }
+
+      - name: Run clearxr-streamer unit tests
+        run: cargo test --manifest-path clearxr-streamer/Cargo.toml --locked --lib

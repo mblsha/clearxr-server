@@ -4,6 +4,7 @@ mod cloudxr;
 mod commands;
 mod job_object;
 mod models;
+mod network;
 mod openxr_registration;
 mod protocol;
 mod qr;

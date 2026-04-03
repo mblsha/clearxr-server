@@ -8,6 +8,7 @@ use crate::models::{
     AppConfig, BarcodePayload, ConnectionHealth, OpenXrRegistrationStatus, RuntimeSnapshot,
     StatusBlock,
 };
+use crate::network::{ordered_local_ipv4_addresses, preferred_local_ipv4_address};
 use crate::openxr_registration::{
     deregister_openxr_layer as deregister_openxr_layer_impl,
     get_openxr_registration_status as get_openxr_registration_status_impl,
@@ -18,9 +19,18 @@ use crate::server_id::get_server_id_with_fallback;
 use crate::session_management::SessionManagementService;
 use crate::settings::ensure_settings_file;
 
+fn resolved_default_config() -> AppConfig {
+    let mut config = AppConfig::default();
+    if let Ok(host_address) = preferred_local_ipv4_address() {
+        config.host_address = host_address;
+    }
+    config
+}
+
 #[tauri::command]
 pub async fn bootstrap_app_state(state: State<'_, AppState>) -> Result<RuntimeSnapshot, String> {
     let (server_id, used_fallback) = get_server_id_with_fallback();
+    let default_config = resolved_default_config();
     let settings_note = match ensure_settings_file() {
         Ok(path) => format!(
             "Default app launch can be configured in {}.",
@@ -33,6 +43,7 @@ pub async fn bootstrap_app_state(state: State<'_, AppState>) -> Result<RuntimeSn
 
     Ok(state
         .update(|snapshot| {
+            snapshot.config = default_config.clone();
             snapshot.server_id = Some(server_id.clone());
             snapshot.bonjour.health = ConnectionHealth::Stopped;
             snapshot.bonjour.detail = "Ready to advertise over Bonjour".to_string();
@@ -70,32 +81,12 @@ pub async fn get_runtime_snapshot(state: State<'_, AppState>) -> Result<RuntimeS
 
 #[tauri::command]
 pub fn get_default_config() -> AppConfig {
-    AppConfig::default()
+    resolved_default_config()
 }
 
 #[tauri::command]
 pub fn get_local_ip_addresses() -> Result<Vec<String>, String> {
-    let mut addresses: Vec<String> = if_addrs::get_if_addrs()
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter_map(|interface| match interface.addr.ip() {
-            std::net::IpAddr::V4(ip)
-                if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() =>
-            {
-                Some(ip.to_string())
-            }
-            _ => None,
-        })
-        .collect();
-
-    addresses.sort();
-    addresses.dedup();
-
-    if addresses.is_empty() {
-        addresses.push("127.0.0.1".to_string());
-    }
-
-    Ok(addresses)
+    ordered_local_ipv4_addresses().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
