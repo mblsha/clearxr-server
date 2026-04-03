@@ -23,6 +23,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -40,6 +45,9 @@ jobs:
               New-Item -ItemType File -Path $path | Out-Null
             }
           }
+
+      - name: Run Tauri UI helper unit tests
+        run: node --test ui/app_helpers.test.js
 
       - name: Run clearxr-streamer unit tests
         run: cargo test --manifest-path clearxr-streamer/Cargo.toml --locked --lib
