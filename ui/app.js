@@ -1,3 +1,14 @@
+const {
+  firstAddressValue,
+  formatHealthLabel,
+  isOpenXrReady,
+  isServerRunning,
+  normalizeAddressOption,
+  openXrActionLabel,
+  openXrActionNote,
+  openXrSummaryLabel,
+} = window.clearXrUiHelpers;
+
 const runtimeIds = {
   overall: document.getElementById("overall-status"),
   bonjour: document.getElementById("bonjour-status"),
@@ -41,18 +52,6 @@ let currentOpenXrStatus = null;
 let serverActionInFlight = false;
 let openXrActionInFlight = false;
 
-function formatHealthLabel(health) {
-  switch (health) {
-    case "running":
-      return "Running";
-    case "paused":
-      return "Listening";
-    case "stopped":
-    default:
-      return "Stopped";
-  }
-}
-
 function setRuntimeFallback(message) {
   runtimeIds.overall.textContent = "Unavailable";
   runtimeIds.bonjour.textContent = "Unavailable";
@@ -80,26 +79,6 @@ function setRuntimeFallback(message) {
   runtimeIds.openxrActionNote.textContent = message;
 }
 
-function normalizeAddressOption(entry) {
-  if (typeof entry === "string") {
-    return { value: entry, label: entry };
-  }
-
-  const address = entry?.address || "";
-  const interfaceName = entry?.interfaceName || "";
-  const label = interfaceName ? `${address} (${interfaceName})` : address;
-  return { value: address, label };
-}
-
-function firstAddressValue(addresses, fallbackValue = "") {
-  const firstEntry = addresses[0];
-  if (typeof firstEntry === "string") {
-    return firstEntry;
-  }
-
-  return firstEntry?.address || fallbackValue;
-}
-
 function setAddressOptions(addresses, selectedAddress) {
   runtimeIds.localAddress.replaceChildren();
 
@@ -116,19 +95,8 @@ function setAddressOptions(addresses, selectedAddress) {
   }
 
   if (!runtimeIds.localAddress.value && addresses.length > 0) {
-    runtimeIds.localAddress.value = addresses[0];
+    runtimeIds.localAddress.value = firstAddressValue(addresses);
   }
-}
-
-function isServerRunning(snapshot) {
-  if (!snapshot) {
-    return false;
-  }
-
-  return (
-    snapshot.sessionManagement.health !== "stopped" ||
-    snapshot.bonjour.health !== "stopped"
-  );
 }
 
 function renderServerButton(snapshot) {
@@ -163,19 +131,8 @@ function renderQrDrawer(snapshot) {
   }
 }
 
-function isOpenXrReady(status) {
-  return Boolean(status?.runtimeIsActive && status?.layerIsRegistered);
-}
-
 function renderOpenXrButtons(status) {
-  let label = "Register OpenXR Runtime + Layer";
-  if (status?.runtimeIsActive && !status?.layerIsRegistered) {
-    label = "Register OpenXR Layer";
-  } else if (isOpenXrReady(status)) {
-    label = "Reapply OpenXR Registration";
-  }
-
-  runtimeIds.openxrAction.textContent = label;
+  runtimeIds.openxrAction.textContent = openXrActionLabel(status);
   runtimeIds.openxrAction.disabled = openXrActionInFlight;
   runtimeIds.openxrAction.classList.toggle("button-busy", openXrActionInFlight);
   runtimeIds.openxrAction.classList.toggle("secondary", isOpenXrReady(status));
@@ -193,12 +150,7 @@ function renderOpenXrStatus(status) {
 
   const fullyRegistered = isOpenXrReady(status);
   runtimeIds.openxrPanel.classList.toggle("is-hidden", fullyRegistered);
-
-  if (!fullyRegistered) {
-    runtimeIds.openxrSummaryStatus.textContent = status.runtimeIsActive
-      ? "Layer Needed"
-      : "Needs Registration";
-  }
+  runtimeIds.openxrSummaryStatus.textContent = openXrSummaryLabel(status);
 
   runtimeIds.openxrRuntime.textContent = status.runtimeIsActive
     ? "Clear XR Active"
@@ -208,9 +160,7 @@ function renderOpenXrStatus(status) {
     ? "Registered"
     : "Needs Registration";
   runtimeIds.openxrLayerDetail.textContent = status.layerDetail;
-  runtimeIds.openxrActionNote.textContent = status.runtimeIsActive
-    ? "Clear XR is already selected as the OpenXR runtime. The button can still reapply the layer/runtime registration if needed."
-    : "Runtime registration writes the machine-wide OpenXR ActiveRuntime key, so Windows may require administrator rights.";
+  runtimeIds.openxrActionNote.textContent = openXrActionNote(status);
   renderOpenXrButtons(status);
 }
 
