@@ -99,3 +99,10 @@ pub struct OpenXrRegistrationStatus {
     pub layer_registration_scope: Option<String>,
     pub layer_detail: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalIpAddressOption {
+    pub address: String,
+    pub interface_name: String,
+}

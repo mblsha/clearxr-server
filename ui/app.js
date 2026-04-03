@@ -80,13 +80,34 @@ function setRuntimeFallback(message) {
   runtimeIds.openxrActionNote.textContent = message;
 }
 
+function normalizeAddressOption(entry) {
+  if (typeof entry === "string") {
+    return { value: entry, label: entry };
+  }
+
+  const address = entry?.address || "";
+  const interfaceName = entry?.interfaceName || "";
+  const label = interfaceName ? `${address} (${interfaceName})` : address;
+  return { value: address, label };
+}
+
+function firstAddressValue(addresses, fallbackValue = "") {
+  const firstEntry = addresses[0];
+  if (typeof firstEntry === "string") {
+    return firstEntry;
+  }
+
+  return firstEntry?.address || fallbackValue;
+}
+
 function setAddressOptions(addresses, selectedAddress) {
   runtimeIds.localAddress.replaceChildren();
 
   for (const address of addresses) {
+    const normalized = normalizeAddressOption(address);
     const option = document.createElement("option");
-    option.value = address;
-    option.textContent = address;
+    option.value = normalized.value;
+    option.textContent = normalized.label;
     runtimeIds.localAddress.appendChild(option);
   }
 
@@ -264,7 +285,10 @@ async function bootstrap() {
   renderSnapshot(snapshot, { syncForm: true });
   renderOpenXrStatus(openxrStatus);
   currentBundleId = defaultConfig.bundleId || currentBundleId;
-  runtimeIds.localAddress.value = localAddresses[0] || defaultConfig.hostAddress;
+  runtimeIds.localAddress.value = firstAddressValue(
+    localAddresses,
+    defaultConfig.hostAddress,
+  );
   runtimeIds.port.value = defaultConfig.port;
   runtimeIds.forceQrCode.checked = defaultConfig.forceQrCode;
 
